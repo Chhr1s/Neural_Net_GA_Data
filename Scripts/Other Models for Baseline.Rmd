@@ -1,0 +1,203 @@
+---
+title: "Other models for final"
+author: "Christopher Loan"
+date: "3/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r }
+library(keras)
+library(tidyverse)
+library(lme4)
+library(caret)
+library(vip)
+library(pdp)
+```
+
+```{r}
+dat_2015 <- rio::import(
+  here::here('Imputed Data', 'year_2015_imputed.csv')) %>% 
+  select(-exclusionary_ps) %>% 
+  mutate_if(is.character, as.factor)
+  
+dat_2016 <- rio::import(
+  here::here('Imputed Data', 'year_2016_imputed.csv')) %>% 
+  select(-exclusionary_ps) %>% 
+  mutate_if(is.character, as.factor)
+
+dat_2017 <- rio::import(
+  here::here('Imputed Data', 'year_2017_imputed.csv')) %>% 
+  select(-exclusionary_ps) %>% 
+  mutate_if(is.character, as.factor)
+  
+## we're going to reserve this for testing
+dat_2018 <- rio::import(
+  here::here('Imputed Data', 'year_2018_imputed.csv')) %>%
+  select(-exclusionary_ps) %>%
+  mutate_if(is.character, as.factor)
+
+
+dat <- bind_rows(dat_2015, dat_2016, dat_2017)
+
+## anything with perc_ is school level
+
+
+head(dat) 
+head(dat_2018)
+```
+
+```{r}
+
+## I'm doing this to make a categorical variable
+## alternative would be making a tensor of 1s and 0s
+
+reference_district <- 
+  dat %>% 
+  select(district) %>% 
+  unique() %>% 
+  mutate(level_district = 1:nrow(.))
+
+reference_school <- 
+  dat %>% 
+  select(school_name) %>% 
+  unique() %>% 
+  mutate(level_school = 1:nrow(.))
+
+reference_schtype <- 
+  dat %>% 
+  select(fac_schtype) %>% 
+  unique() %>% 
+  mutate(level_schtype = 1:nrow(.))
+```
+
+```{r}
+## make sure same labels for training and testing categories
+
+all_numeric <- dat %>% 
+  left_join(reference_schtype) %>% 
+  left_join(reference_school) %>% 
+  left_join(reference_district) %>% 
+  select(-district, -school_name, -fac_schtype)
+
+all_numeric_test <- dat_2018 %>% 
+  left_join(reference_schtype) %>% 
+  left_join(reference_school) %>% 
+  left_join(reference_district) %>% 
+  select(-district, -school_name, -fac_schtype) %>% 
+  drop_na()
+```
+
+```{r}
+# Use ALL data because we have another year as our final test data
+
+train_data <- all_numeric %>%
+  select(-exclusionary)
+
+## changing the year column to just 1:3 because i have 3 years. 
+
+train_data[,15] <-c(rep(1, nrow(dat_2015)), rep(2, nrow(dat_2016)), rep(3, nrow(dat_2017))) 
+
+test_data <- all_numeric_test %>%
+  select(-exclusionary) 
+
+## same year representation as in train
+test_data[,15] <- c(rep(4, nrow(test_data)))
+```
+
+```{r}
+train_scale <- 
+  scale(train_data) %>% 
+  as_tibble() %>% 
+  mutate(exclusionary = all_numeric$exclusionary)
+```
+
+```{r}
+## center and scale test based on the train data
+
+## NOTE: originally, I scaled train and test SEPARATELY
+## but found this function and re-scaled test based on 
+## train's mean and sd. Nearly no difference, which makes sense
+## being the same population and just a different year
+
+## this is a `{caret}` based solution:
+
+normParam <- preProcess(train_data)
+test_scale <- predict(normParam, all_numeric_test) %>% 
+  mutate(exclusionary = all_numeric_test$exclusionary)
+```
+
+```{r}
+linear_model <- train_scale %>%
+  mutate(level_district = factor(level_district),
+         level_school = factor(level_school),
+         level_schtype = factor(level_schtype)) %>% 
+  select(-level_school) %>% 
+  glm(formula = exclusionary ~ ., family = 'poisson') 
+
+summary(linear_model)
+```
+
+```{r}
+test_scale <- 
+  test_scale %>% 
+  mutate(level_district = factor(level_district),
+         level_school = factor(level_school),
+         level_schtype = factor(level_schtype))
+
+linear_prediction <- 
+   predict.glm(linear_model, 
+              newdata = test_scale)
+
+
+lm_d <- test_scale$exclusionary - linear_prediction
+lm_mse <- mean((lm_d)^2)
+lm_mae <- mean(abs(lm_d))
+
+lm_mse
+lm_mae
+```
+
+```{r}
+h_model <- train_scale %>%
+  mutate(level_district = factor(level_district),
+         level_school = factor(level_school),
+         level_schtype = factor(level_schtype)) %>% 
+  glmer(formula = exclusionary ~  
+         total + 
+         perc_frl + 
+         perc_black + 
+         perc_white + 
+         perc_migrant + 
+         perc_esol + 
+         district_size + 
+         d_black + 
+         d_hisp + 
+         d_white + 
+         d_esol + 
+         d_migrant + 
+         d_frl + 
+         level_schtype + 
+         year + 
+         (1 | level_school/level_district), 
+        family = 'poisson'
+        )
+
+summary(h_model)
+
+h_prediction <-predict(h_model, 
+                       newdata = test_scale, 
+                       allow.new.levels = T)
+
+h_d <- test_scale$exclusionary - h_prediction
+h_mse <- mean((h_d)^2)
+h_mae <- mean(abs(h_d))
+
+h_mse
+h_mae
+```
+
+

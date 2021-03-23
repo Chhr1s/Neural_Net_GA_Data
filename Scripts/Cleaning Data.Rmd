@@ -1,0 +1,134 @@
+---
+title: "Cleaning"
+author: "Christopher Loan"
+date: "3/10/2021"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(rio)
+library(here)
+library(janitor)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+years <- c(2015:2018)
+
+for (i in years){
+  
+  frl_file <- paste0("Free Reduced Lunch (FRL) Fiscal Year", i, " Data Report.csv")
+  all_students_file <- paste0("Enrollment_By_Grade_Level_", i, ".csv")
+  enroll_file <- paste0('Enrollment_by_Subgroups_Programs_', i, '.csv')
+  discipline_file <- paste0('sr', i, '_discipline_action_counts_sch.xls')
+
+  frl <- import(here("Raw Data", frl_file)) %>% 
+    clean_names() %>% 
+    mutate(kk_12_percent_frl = as.numeric(kk_12_percent_frl),
+           year = i
+           ) %>% 
+    separate(col = school_id_school_name, 
+             into = c('school_id','school_name'), 
+             sep = " - ",
+             extra = "merge") %>% 
+    filter(system_name != 'N/A') %>% 
+    select(-system_id) 
+  
+  all_students <-  #https://gosa.georgia.gov/report-card-dashboards-data/downloadable-data
+    import(
+      here('Raw Data',
+           all_students_file)) %>%
+    clean_names() %>% 
+    filter(enrollment_period == 'Fall') %>% 
+    group_by(instn_name) %>% 
+    summarize(num_students = sum(enrollment_count)) %>% 
+    transmute(school_name = instn_name, 
+              total = num_students)
+  
+  
+  school_demos <- import(
+      here('Raw Data', #https://gosa.georgia.gov/report-card-dashboards-data/downloadable-data
+    enroll_file)) %>% 
+    clean_names() %>% 
+    filter(detail_lvl_desc == 'School') %>% 
+    transmute(school_name = instn_name,
+              system_name = school_dstrct_nm,
+              perc_black = enroll_percent_black,
+              perc_hisp = enroll_percent_hispanic, 
+              perc_white = enroll_percent_white, 
+              perc_migrant = enroll_percent_migrant, 
+              perc_esol = enroll_pct_esol
+              )
+    
+  schools <- school_demos %>%
+    full_join(all_students)
+  
+  disc_action <- import(
+    here("Raw Data", 
+         discipline_file)
+    ) %>% 
+    clean_names() %>% 
+    left_join(frl)
+  
+  dat <- disc_action %>% 
+    left_join(schools) %>% # if this is left_join I have to impute
+    group_by(system_name) %>% 
+    mutate(
+      exclusionary = 
+             out_of_school_suspension +
+             juvenile_or_court_referral +
+             permanent_expulsion, 
+             assigned_to_alternative_school + 
+             non_permanent_expulsion,
+             # physical_restraint + # this is probably messing with the model because elementary schools are high
+             # corporal_punishment + # similar comment to above
+           district = factor(system_name),
+           school_name = factor(school_name), 
+           perc_frl = kk_12_percent_frl 
+           ) %>% 
+    select(district, 
+           school_name, 
+           total,
+           contains('frl'),
+           contains('black'), 
+           contains('hisp'), 
+           contains('white'), 
+           contains('migrant'), 
+           contains('esol'), 
+           exclusionary) %>% 
+    select(-kk_12_percent_frl)
+  
+  imputed <- dat %>% 
+    select(total:exclusionary) %>% 
+    mice::mice(m = 1, seed = 12345, remove.collinear = T) %>% 
+    mice::complete(1)
+  
+  dat_imp <- dat %>%
+    select(district, school_name) %>%
+    bind_cols(imputed)
+  
+  dat_final <- dat_imp %>%
+    mutate(exclusionary_ps = exclusionary/total) %>% 
+    group_by(district) %>% 
+    mutate(district_size = sum(total, na.rm = T),
+           d_black = sum(total*perc_black, na.rm = T)/district_size,
+           d_hisp = sum(total*perc_hisp, na.rm = T)/district_size,
+           d_white = sum(total*perc_white, na.rm = T)/district_size,
+           d_esol = sum(total*perc_esol, na.rm = T)/district_size,
+           d_migrant = sum(total*perc_migrant, na.rm = T)/district_size,
+           d_frl = sum(total*perc_frl, na.rm = T)/district_size 
+           #d_harsh = sum(harsh, na.rm = T)/district_size # unsure if this is fair to include
+           ) %>%
+    ungroup() %>% 
+    mutate(year = i) %>% 
+    left_join(import(here::here('Raw Data', 'facility_types.csv'))) %>% 
+    select(-contains('system_name'))
+  
+  dat_final %>% rio::export(paste0('year_', i, '_imputed.csv'))
+}
+## I manually moved these to the folder "/Imputed Data"
+``` 
