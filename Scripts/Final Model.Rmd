@@ -180,7 +180,7 @@ evaluation_metrics <- model %>%
 evaluation_metrics
 ```
 
-```{r}
+```{r, eval = F, include = F}
 model <-
   load_model_hdf5("tuned_model_2.h5")
 #model %>% save_model_tf('tuned_model_2_second_export')
