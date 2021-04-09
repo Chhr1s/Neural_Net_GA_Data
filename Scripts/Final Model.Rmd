@@ -254,3 +254,33 @@ p8 <- partial(model, pred.var = "level_school", pred.fun = pred_wrapper,
   autoplot(alpha = 0.1)
 p8
 ```
+
+```{r}
+# y_hat <- 
+#   model %>%
+#   predict(test_scale)
+
+plot_dat <- tibble(
+  actual = test_targets,
+  neural_net = y_hat,
+  lm = linear_prediction, 
+  hlm = h_prediction
+  ) %>% 
+  mutate(id = 1:nrow(plot_dat))
+
+pd_long <- 
+  plot_dat %>% 
+  pivot_longer(-c(actual, id), 
+               names_to = 'model', 
+               values_to = 'value')
+```
+
+```{r}
+pd_long %>% 
+  filter(model != 'hlm') %>% 
+  ggplot(aes(x = actual, y = value, color = model)) +
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1)
+```
+
+
